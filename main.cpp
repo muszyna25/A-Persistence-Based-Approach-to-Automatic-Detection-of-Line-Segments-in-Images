@@ -22,6 +22,8 @@
 #include <boost/regex.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 
+//#define _ITERATOR_DEBUG_LEVEL 0
+
 using namespace boost::filesystem;
 
 using namespace boost;
@@ -117,6 +119,27 @@ public:
     
 };
 
+int Projection (Point direction, Point p) // along the given direction
+{
+    if ( direction.x == 0 ) return p.x; // vertical
+    
+    if ( direction.y == 0 ) return p.y; // horizontal
+    
+    if ( direction.x == direction.y ) return p.x - p.y; // diagonal down
+    
+    if ( direction.x + direction.y == 0 ) return p.x + p.y; // diagonal down
+    
+    if ( direction == Point(-2,1) ) return p.x + 2*p.y;
+    if ( direction == Point(2,1) ) return p.x - 2*p.y;
+    
+    if ( direction == Point(-1,2) ) return p.x + p.y/2;
+    if ( direction == Point(1,2) ) return p.x - p.y/2;
+    
+    std::cout<<"\nError in Projection";
+    
+    return 0;
+}
+
 class Line
 {
 public:
@@ -128,34 +151,13 @@ public:
     
     Line (Point initial, Point dir, Segment const& segment)
     {
+        projection = Projection(dir, initial);
         direction = dir;
         strength = segment.strength;
         start = segment.start;
         finish = segment.finish;
-        if ( direction.y == 0 ) // horizontal
-        {
-            projection = Projection( dir, initial );
-            first = Point( start, initial.y );
-            second = Point( finish, initial.y );
-        }
-        if ( direction.x == 0 ) // vertical
-        {
-            projection = Projection( dir, initial );
-            first = Point( initial.x, start );
-            second = Point( initial.x, finish );
-        }
-        if ( direction.x == direction.y ) // diagonal down
-        {
-            projection = Projection( dir, initial );
-            first = initial + Point( start, start );
-            second = initial + Point( finish, finish );
-        }
-        if ( direction.x + direction.y == 0 ) // diagonal up
-        {
-            projection = Projection( dir, initial );
-            first = initial + Point( -start, start );
-            second = initial + Point( -finish, finish );
-        }
+        first = initial + start * direction;
+        second = initial + finish * direction;
     }
     
     void Print ()
@@ -163,36 +165,7 @@ public:
         std::cout<<" dir="<<direction<<" s="<<strength<<" "<<first<<second;
     }
     
-    int Projection (Point direction, Point p) // along the given direction
-    {
-        if ( direction.x == 0 ) return p.x; // vertical
-        
-        if ( direction.y == 0 ) return p.y; // horizontal
-        
-        if ( direction.x == direction.y ) return p.x - p.y; // diagonal down
-        
-        if ( direction.x + direction.y == 0 ) return p.x + p.y; // diagonal down
-        
-        std::cout<<"\nError in Projection";
-        
-        return 0;
-    }
 };
-
-int Projection (Point direction, Point p) // along the given direction
-{
-    if ( direction.x == 0 ) return p.x; // vertical
-    
-    if ( direction.y == 0 ) return p.y; // horizontal
-    
-    if ( direction.x == direction.y ) return p.x - p.y; // diagonal down
-    
-    if ( direction.x + direction.y == 0 ) return p.x + p.y; // diagonal down
-    
-    std::cout<<"\nError in Projection";
-    
-    return 0;
-}
 
 void Merge_Segments (std::map<int,Segment>& segments, int segm_left, int segm_right, Index_Value node, std::vector<int>& segm_indices)
 {
@@ -224,9 +197,19 @@ void Copy_Segments (std::vector<Segment>const& segments_old,std::vector<Segment>
     for ( auto s : segments_old ) segments_new.push_back( s );
 }
 
-bool Find_Persistence (std::map<int,Segment>& segments, double value, double& persistence, std::vector<Segment>& strongest)
+bool Find_Persistence (std::map<int,Segment>& segments, double value, double& persistence, std::vector<Segment>& strongest, bool debug)
 {
-    bool debug = false;
+    strongest.clear();
+    
+    if ( segments.size() == 1 )
+    {
+        persistence = (segments.begin()->second).strength;
+        
+        strongest.push_back( segments.begin()->second );
+        return true;
+    }
+    
+    //bool debug = false;
     std::vector<Index_Value> strengths;
 
     persistence = 0;
@@ -234,7 +217,7 @@ bool Find_Persistence (std::map<int,Segment>& segments, double value, double& pe
     // Clear vector for each iteration of the external loop.
     strongest.clear();
     
-    if ( segments.size() <= 2 ) return false; // too few segments for comparison
+    //if ( segments.size() <= 2 ) return false; // too few segments for comparison
     
     // Copy segment's sum (sum of node values) to variable strength.
     for ( auto it = segments.begin(); it != segments.end(); it++ )
@@ -306,7 +289,7 @@ void Find (std::multimap<double,int>& m, double key, int v, std::multimap<double
     for ( it = iters.first; it != iters.second; ++it )
         if( it->second == v ) return;
     
-    cout << "\nError in Find: not found key="<<key;
+    cout << "\nError in Find: key="<<key;
     
     return;
 }
@@ -317,14 +300,17 @@ void Find_Gap (std::multimap<double, std::multimap<double,int>::iterator>& m,
                std::multimap<double, std::multimap<double,int>::iterator>::iterator& it_return)
 {
     auto iters = m.equal_range( key );
-    for ( std::multimap<double, std::multimap<double,int>::iterator>::iterator it=iters.first; it!=iters.second; ++it)
+    for ( auto it=iters.first; it!=iters.second; ++it )
     {
-        if(it->second == iter)
+        if (it->second == iter)
         {
             it_return = it;
             return;
         }
+        else
+            cout << "Key not found" << endl;
     }
+    cout << "\nError in Find_Gap; key=" << key << endl;
     return;
 }
 
@@ -348,71 +334,76 @@ void Erase_Old_Gaps (std::multimap<double,int>& segments_by_strength,
                         std::multimap<double, std::multimap<double,int>::iterator>& gaps_in_strengths,
                         std::multimap<double, int>::iterator& iter_old )
 {
+    // Get old strength
     double old_strength = iter_old->first;
-    //Get position to strength befor and after current strength
-    std::multimap<double, int>::iterator iter_low;
-    Iter_Prev(segments_by_strength, iter_old, iter_low);
-    std::multimap<double, int>::iterator iter_upp = next( iter_old );
-     
-    double left_gap = old_strength;
-    if ( iter_upp != segments_by_strength.end() )
-        left_gap -= (iter_upp->first);
-    Remove_Gap( gaps_in_strengths, left_gap, iter_old );
-        
-    if ( iter_low != segments_by_strength.end() )
+
+    // Get iterator to left element
+    std::multimap<double, int>::iterator iter_prev;
+    Iter_Prev(segments_by_strength, iter_old, iter_prev);
+    
+    // Get iterator to right element
+    std::multimap<double, int>::iterator iter_next = next( iter_old );
+    
+    if ( iter_prev == segments_by_strength.end() and iter_next == segments_by_strength.end() )
     {
-        double right_gap = iter_low->first - old_strength;
-        Remove_Gap( gaps_in_strengths, right_gap, iter_low );
-        
-        gaps_in_strengths.insert(std::pair<double, multimap<double,int>::iterator> ( left_gap + right_gap, iter_low ) );
+        Remove_Gap( gaps_in_strengths, old_strength, iter_old );
+        return;
+    }
+    
+    double left_gap = old_strength;
+    if ( iter_prev != segments_by_strength.end() )
+    {
+        left_gap = left_gap - (iter_prev->first);
+        Remove_Gap( gaps_in_strengths, left_gap, iter_prev );
+    }
+    
+    double right_gap = iter_next->first;
+    if ( iter_next != segments_by_strength.end() )
+    {
+        right_gap = right_gap - old_strength;
+        //Remove_Gap( gaps_in_strengths, right_gap, iter_next );
+        Remove_Gap( gaps_in_strengths, right_gap, iter_old );
     }
 }
 
 void Insert_New_Gaps (std::multimap<double, int>& segments_by_strength,
                       std::multimap<double, multimap<double,int>::iterator>& gaps_in_strengths,
-                      multimap<double,int>::iterator& iter_new)
+                      multimap<double,int>::iterator& iter_current)
 {
-    double new_strength = iter_new->first;
+    // Strength of current segment
+    double new_strength = iter_current->first;
     
-    // Get position to strength befor and after current strength
-    std::multimap<double, int>::iterator iter_low;
-    Iter_Prev(segments_by_strength, iter_new, iter_low);
-    std::multimap<double, int>::iterator iter_upp = next( iter_new );
+    // Get iterator to left element
+    std::multimap<double, int>::iterator iter_prev;
+    Iter_Prev(segments_by_strength, iter_current, iter_prev);
     
-    if ( iter_low != segments_by_strength.end() )
+    // Get iterator to right element
+    std::multimap<double, int>::iterator iter_next = next( iter_current );
+    
+    // Insert gap if it is new segment
+    if ( iter_prev == segments_by_strength.end() and iter_next == segments_by_strength.end() )
     {
-        // Gap value for the very first node
-        double old_gap = iter_low->first;
-        if( iter_upp != segments_by_strength.end() )
-            old_gap -= iter_upp->first;
-        
-        // Remove gap from gaps_in_strengths
-        if ( iter_upp != segments_by_strength.end() )
-            Remove_Gap( gaps_in_strengths, old_gap, iter_low );
+        gaps_in_strengths.insert(std::pair<double, multimap<double,int>::iterator> ( new_strength, iter_current ) );
+        return;
     }
-    
-    // Add two new gaps to gaps_in_strenghts
-    // Left gap
-    /*
-    double left_gap = new_strength;
-    if ( iter_upp != segments_by_strength.end() )
-        left_gap -= iter_upp->first;
-    gaps_in_strengths.insert(std::pair<double, multimap<double,int>::iterator> ( left_gap, iter_new ) );
-    */
-    
-    double left_gap = new_strength;
-    if ( iter_upp != segments_by_strength.end() )
-    {
-        left_gap -= iter_upp->first;
-    }
-    
-    if ( iter_upp == segments_by_strength.end() and iter_low == segments_by_strength.end())
-        gaps_in_strengths.insert(std::pair<double, multimap<double,int>::iterator> ( left_gap, iter_new ) );
-    
-    // Right gap
-    if ( iter_low != segments_by_strength.end() )
-        gaps_in_strengths.insert(std::pair<double, multimap<double,int>::iterator> ( iter_low->first - new_strength, iter_low ) );
 
+    // If the left and right elements exist
+    if ( iter_prev != segments_by_strength.end() and iter_next != segments_by_strength.end() )
+    {
+        Remove_Gap( gaps_in_strengths, iter_next->first - iter_prev->first, iter_prev );
+    }
+    
+    // Add new gap/gaps to gaps_in_strenghts
+    
+    // Insert left gap
+    double left_gap = new_strength - iter_prev->first;
+    if ( iter_prev != segments_by_strength.end() )
+        gaps_in_strengths.insert(std::pair<double, multimap<double,int>::iterator> ( left_gap, iter_prev ) );
+    
+    // Insert right gap
+    double right_gap = iter_next->first - new_strength;
+    if ( iter_next != segments_by_strength.end() )
+        gaps_in_strengths.insert(std::pair<double, multimap<double,int>::iterator> ( right_gap, iter_current ) );
 }
 
 void Add_New_Segment (std::map<int,Segment>& segments, Index_Value node, int i, std::vector<int>& segm_indices,
@@ -423,8 +414,10 @@ void Add_New_Segment (std::map<int,Segment>& segments, Index_Value node, int i, 
     Segment s( i, node, segm_indices );
     
     // Update strength of new segment with one node.
-    auto iter_new = segments_by_strength.insert( std::pair<double,int>(s.strength, i) );
+    //auto iter_new = segments_by_strength.insert( std::pair<double,int>(s.strength, i) );
+    std::multimap<double, int>::iterator iter_new = segments_by_strength.insert( std::pair<double,int>(s.strength, i) );
     
+    // Insert gap
     Insert_New_Gaps( segments_by_strength, gaps_in_strengths, iter_new );
     
     // Add new segment
@@ -435,18 +428,21 @@ void Add_New_Node (std::map<int,Segment>& segments, std::vector<int>& segm_indic
                    std::multimap<double, int>& segments_by_strength,
                    std::multimap<double, multimap<double,int>::iterator>& gaps_in_strengths)
 {
-    double old_strength = 0.0;
-    
     // Save old strength value of the given segment.
-    old_strength = segments[ segm_index ].strength;
+    double old_strength = segments[ segm_index ].strength;
     
     // Add new node to segment
     segments[ segm_index ].Add_Node( node, segm_indices );
     
     std::multimap<double,int>::iterator iter_old;
     
+    // Find iterator to segment
     Find( segments_by_strength, old_strength, segm_index, iter_old );
+    
+    if ( iter_old == segments_by_strength.end() )
+        cout << "\nError iterator Add_New_Node()" << endl;
 
+    // Remove gaps
     Erase_Old_Gaps( segments_by_strength, gaps_in_strengths, iter_old );
     
     segments_by_strength.erase( iter_old );
@@ -454,6 +450,7 @@ void Add_New_Node (std::map<int,Segment>& segments, std::vector<int>& segm_indic
     double new_strength = segments[ segm_index ].strength;
     auto iter_new = segments_by_strength.insert( std::pair<double,int>(new_strength, segm_index) );
     
+    // Insert new gaps
     Insert_New_Gaps( segments_by_strength, gaps_in_strengths, iter_new );
 }
 
@@ -472,12 +469,20 @@ void Merging_Two_Segments (std::map<int,Segment>& segments,
     // Erase gaps of left segment
     std::multimap<double,int>::iterator iter_old_segm_left;
     Find( segments_by_strength, old_strength_segm_left, segm_left, iter_old_segm_left );
+    
+    if ( iter_old_segm_left == segments_by_strength.end() )
+        cout << "\nError iterator left segment in Merging_Two_Segments()" << endl;
+    
     Erase_Old_Gaps( segments_by_strength, gaps_in_strengths, iter_old_segm_left );
     segments_by_strength.erase( iter_old_segm_left );
 
     // Erase gaps of right segment
     std::multimap<double,int>::iterator iter_old_segm_right;
     Find( segments_by_strength, old_strength_segm_right, segm_right, iter_old_segm_right );
+    
+    if ( iter_old_segm_right == segments_by_strength.end() )
+        cout << "\nError iterator right segment in Merging_Two_Segments()" << endl;
+    
     Erase_Old_Gaps( segments_by_strength, gaps_in_strengths, iter_old_segm_right );
     segments_by_strength.erase( iter_old_segm_right );
 
@@ -491,7 +496,7 @@ void Merging_Two_Segments (std::map<int,Segment>& segments,
     Insert_New_Gaps( segments_by_strength, gaps_in_strengths, iter_new );
 }
 
-bool Find_Best_Segments (std::vector<double>const& graph, std::vector<Segment>& best, double sensitivity)
+bool Find_Best_Segments (std::vector<double>const& graph, std::vector<Segment>& best, double sensitivity, bool debug)
 {
     double median;
 
@@ -506,10 +511,14 @@ bool Find_Best_Segments (std::vector<double>const& graph, std::vector<Segment>& 
     std::multimap<double, int> segments_by_strength;
     std::multimap<double, multimap<double,int>::iterator> gaps_in_strengths; // iter points to the strength just above the gap
     
+    int counter = 0;
+    
     // Loop over values in the decreasing order
     double gap_max = 0;
     for ( int i = 0; i < sorted.size(); i++ )
     {
+        cout << "\nIndex of sorted element: " << i << endl;
+        
         int segm_left = -1, segm_right = -1;
 
         if ( sorted[i].value < sensitivity * median ) break; // too small values
@@ -520,8 +529,9 @@ bool Find_Best_Segments (std::vector<double>const& graph, std::vector<Segment>& 
         
         if ( segm_left < 0 and segm_right < 0 ) // New isolated node
         {
-            Add_New_Segment(segments, sorted[i], i, segm_indices, segments_by_strength, gaps_in_strengths);
-            
+            Add_New_Segment(segments, sorted[i], counter, segm_indices, segments_by_strength, gaps_in_strengths);
+            //Add_New_Segment(segments, sorted[i], i, segm_indices, segments_by_strength, gaps_in_strengths);
+            counter++;
             continue;
         }
         
@@ -552,7 +562,7 @@ bool Find_Best_Segments (std::vector<double>const& graph, std::vector<Segment>& 
         {
             gap_max = widest->first;
             best.clear();
-            for (std::multimap<double,int>::iterator it = widest->second; it != segments_by_strength.end(); it++)
+            for (std::multimap<double,int>::iterator it = widest->second; it != segments_by_strength.end(); ++it)
                 best.push_back( segments[ it->second ] );
         }
     }
@@ -560,9 +570,9 @@ bool Find_Best_Segments (std::vector<double>const& graph, std::vector<Segment>& 
     return true;
 }
 
-bool Find_Strongest_Segments (std::vector<double>const& graph, std::vector<Segment>& best, double sensitivity)
+bool Find_Strongest_Segments (std::vector<double>const& graph, std::vector<Segment>& best, double sensitivity, bool debug)
 {
-    bool debug = false;
+    //bool debug = false;
     double median;
     double persistence = 0.0, persistence_max = 0;
     
@@ -584,7 +594,10 @@ bool Find_Strongest_Segments (std::vector<double>const& graph, std::vector<Segme
     {
         int segm_left = -1, segm_right = -1;
         
-        if ( sorted[i].value < sensitivity * median ) break; // too small values
+        if ( sorted[i].value < sensitivity * median) break;
+        //if ( sorted[i].value < sensitivity * value_max ) break;
+        //if ( sorted[i].value < 0.1 * median ) break; // too small values
+        //if ( sorted[i].value < 0.75 * median and sorted[i].value < 0.25 * value_max ) break;
         
         if ( sorted[i].index > 0 ) segm_left = segm_indices[sorted[i].index - 1 ];
         
@@ -619,7 +632,7 @@ bool Find_Strongest_Segments (std::vector<double>const& graph, std::vector<Segme
         
         if ( debug ) for ( auto s : segments ) std::cout<<"s"<<s.first<<"="<<s.second.sum;
         
-        Find_Persistence( segments, sorted[i].value, persistence, strongest );
+        Find_Persistence( segments, sorted[i].value, persistence, strongest, debug );
         
         if ( debug ) std::cout<<" p="<<persistence;
         
@@ -866,30 +879,397 @@ void Find_Gradient (Mat_<Vec3b>const& matrix, Point initial, Point direction, st
     }
 }
 
-void Find_Persistent_Segments (Mat_<Vec3b>const& matrix, Point initial, Point direction, std::vector<double>const& coefficients, int length_min, double sensitivity, std::map< int, Line >& lines)
+// vector of matrix values from a pixel corner along a direction
+void Find_Differences (Mat_<Vec3b>const& matrix, Point point, Point direction, std::vector<Vec3d>& differences)
 {
-    bool debug = false;
-    std::vector<double> gradient;
-    Find_Gradient( matrix, initial, direction, coefficients, gradient );
-    // Find segments for the gradient
+    if ( Point_Near_Boundary( matrix.size(), point, (int)differences.size() ) ) return;
+    
+    for ( int i = 0; i < differences.size(); i++ )
+    {
+        if ( direction.y == 0 ) // differences across a horizontal line
+        {
+            differences[ i ] = 1.5 * ( (Vec3d)matrix( point.y + i, point.x ) + (Vec3d)matrix( point.y + i, point.x - 1 )
+                                      - (Vec3d)matrix( point.y - i - 1, point.x ) - (Vec3d)matrix( point.y - i - 1, point.x - 1 ) );
+        }
+        else if ( direction.x == 0 ) // differences across a vertical line
+        {
+            differences[ i ] = 1.5 * ( (Vec3d)matrix( point.y, point.x + i ) + (Vec3d)matrix( point.y - 1, point.x + i )
+                                      - (Vec3d)matrix( point.y, point.x - i - 1 ) - (Vec3d)matrix( point.y - 1, point.x - i - 1 ) );
+        }
+        else if ( direction.x == direction.y ) // differences across a diagonal down
+        {
+            differences[ i ] =  1.5 * ( (Vec3d)matrix( point.y - i - 1, point.x + i ) - (Vec3d)matrix( point.y + i, point.x - i - 1 ) )
+                                        + 0.75 * ( (Vec3d)matrix( point.y - i - 2, point.x + i ) + (Vec3d)matrix( point.y - i - 1, point.x + i + 1 ) )
+                                        - 0.75 * ( (Vec3d)matrix( point.y + i, point.x - i - 2 ) + (Vec3d)matrix( point.y + i + 1, point.x - i - 1 ) );
+        }
+        else if ( direction.x + direction.y == 0 )  // differences across a diagonal up
+        {
+            differences[ i ] = 1.5 * ( (Vec3d)matrix( point.y + i, point.x + i ) - (Vec3d)matrix( point.y - i - 1, point.x - i - 1 ) )
+                                        + 0.75 * ( (Vec3d)matrix( point.y + i + 1, point.x + i ) + (Vec3d)matrix( point.y + i, point.x + i + 1 ) )
+                                        - 0.75 * ( (Vec3d)matrix( point.y - i - 2, point.x - i - 1) + (Vec3d)matrix( point.y - i - 1, point.x - i - 2 ) );
+        }
+        else if ( direction == Point(-2,1) )
+        {
+            differences[ i ] = (2-i%2) * ( (Vec3d)matrix( point.y + i, point.x + (i+1)/2 ) - (Vec3d)matrix( point.y - i - 1, point.x - (i+1)/2 - 1 ) ) + (1+i%2) * ( (Vec3d)matrix( point.y + i, point.x + (i+1)/2-1 ) - (Vec3d)matrix( point.y - i - 1, point.x - (i+1)/2 ) );
+        }
+        else if ( direction == Point(2,1) )
+        {
+            differences[ i ] = (2-i%2) * ( (Vec3d)matrix( point.y - i-1, point.x + (i+1)/2 ) - (Vec3d)matrix( point.y + i, point.x - (i+1)/2 - 1 ) ) + (1+i%2) * ( (Vec3d)matrix( point.y - i-1, point.x + (i+1)/2-1 ) - (Vec3d)matrix( point.y + i, point.x - (i+1)/2 ) );
+        }
+        else if ( direction == Point(1,2) )
+        {
+            differences[ i ] = (2-i%2) * ( (Vec3d)matrix( point.y + (i+1)/2, point.x -i-1 ) - (Vec3d)matrix( point.y - (i+1)/2 -1, point.x +i ) ) + (1+i%2) * ( (Vec3d)matrix( point.y + (i+1)/2-1, point.x -i-1) - (Vec3d)matrix( point.y - (i+1)/2, point.x +i ) );
+        }
+        else if ( direction == Point(-1,2) )
+        {
+            differences[ i ] = (2-i%2) * ( (Vec3d)matrix( point.y + (i+1)/2, point.x +i ) - (Vec3d)matrix( point.y - (i+1)/2 -1, point.x -i-1 ) ) + (1+i%2) * ( (Vec3d)matrix( point.y + (i+1)/2-1, point.x +i) - (Vec3d)matrix( point.y - (i+1)/2, point.x -i-1 ) );
+        }
+    }
+    
+}
+
+//-----------------------------
+bool Derivative_at_Point (Mat_<Vec3b>const& image, Point point, Point direction, std::vector<double>const& weights, double& derivative, bool debug)
+{
+    std::vector<Vec3d> differences( weights.size(), 0 );
+    
+    Find_Differences( image, point, direction, differences );
+    
+    Vec3d difference = Vec3d(0,0,0);
+    
+    for ( int k = 0; k < differences.size(); k++ )
+        
+        difference += weights[k] * differences[ k ];
+    
+    derivative = Color_Norm( difference );
+    
+    return true;
+}
+
+bool Derivatives_along_Line (Mat_<Vec3b>const& image, Point initial, Point direction, int offset, int length_min, std::vector<double>const& weights, std::vector<double>& derivatives, bool debug)
+{
+    int s = 0;
+    
+    int b = length_min + offset;
+    
+    if ( direction.y == 0 ) // horizontal
+    {
+        if ( initial.y < offset or image.rows < offset + initial.y )
+            return false; // too close to the boundary
+        
+        s = image.cols + 1;
+    }
+    else if ( direction.x == 0 ) // vertical
+    {
+        if ( initial.x < offset or image.cols < offset + initial.x )
+            return false; // too close to the boundary
+        
+        s = image.rows + 1;
+    }
+    else if ( direction.x == direction.y ) // diagonal down
+    {
+        if ( initial.y < b - image.rows or image.cols - b < initial.x ) return false;
+        
+        s = std::min( image.rows, image.cols ) + 1;
+        
+        if ( s > image.rows - initial.y ) s = image.rows - initial.y;
+        
+        if ( s > image.cols - initial.x ) s = image.cols - initial.x;
+    }
+    else if ( direction.x + direction.y == 0 ) // diagonal up
+    {
+        if ( initial.x < b or image.rows - b < initial.y ) { return false; }
+        
+        s = std::min( image.rows, image.cols ) + 1;
+        
+        if ( initial.y == 0 and s > initial.x ) s = initial.x;
+        
+        if ( initial.x == image.cols and s > image.rows - initial.y ) s = image.rows - initial.y;
+    }
+    else if ( direction == Point(-2,1) )
+    {
+        s = std::min( image.rows+1, (image.cols+1)/2 );
+        
+        if ( initial.x < 2*b or image.rows - b < initial.y ) { return false; }
+        
+        if ( initial.y == 0 and s > 2*initial.x ) s = 2*initial.x;
+        
+        if ( initial.x == image.cols and s > image.rows - initial.y ) s = image.rows - initial.y;
+    }
+    else if ( direction == Point(2,1) )
+    {
+        s = std::min( image.rows+1, (image.cols+1)/2 );
+        
+        if ( initial.x > image.cols - 2*b or initial.y < b - image.rows ) { return false; }
+        
+        if ( initial.y == 0 and 2*s > image.cols - initial.x ) s = (image.cols - initial.x) / 2;
+        
+        if ( initial.x == 0 and s > image.rows - initial.y ) s = image.rows - initial.y;
+    }
+    else if ( direction == Point(1,2) )
+    {
+        s = std::min( (image.rows+1)/2, image.cols+1 );
+        
+        if ( initial.x > image.cols - b or initial.y < 2*b - image.rows ) { return false; }
+        
+        if ( initial.y == 0 and s > image.cols - initial.x ) s = image.cols - initial.x;
+        
+        if ( initial.x == 0 and 2*s > image.rows - initial.y ) s = (image.rows - initial.y) / 2;
+    }
+    else if ( direction == Point(-1,2) )
+    {
+        s = std::min( (image.rows+1)/2, image.cols+1 );
+        
+        if ( initial.x < b or image.rows - 2*b < initial.y ) { return false; }
+        
+        if ( initial.y == 0 and s > initial.x ) s = initial.x;
+        
+        if ( initial.x == image.cols and 2*s > image.rows - initial.y ) s = (image.rows - initial.y) / 2;
+    }
+    
+    if ( s <= length_min + 2 * offset - 1 ) return false;
+    
+    derivatives.assign( s - 2 * offset + 1, 0 );
+    
+    for ( int k = offset; k <= s - offset; k++ )
+        Derivative_at_Point( image, initial + k * direction, direction, weights, derivatives[ k - offset ], debug );
+    
+    return true;
+}
+
+//-----------------------------
+bool Find_Persistent_Segments (Mat_<Vec3b>const& matrix, Point initial, Point direction, int offset, int length_min, std::vector<double>const& weights, std::map< int, Line >& lines, double sensitivity)
+{
+    bool debug = false; //true;
+    
+    std::vector<double> derivatives;
+    
+    if ( direction.y != 0 ) offset /= abs( direction.y );
+    
+    Derivatives_along_Line( matrix, initial, direction, offset, length_min, weights, derivatives, debug );
+    
     std::vector<Segment> segments;
     
-    Find_Strongest_Segments( gradient, segments, sensitivity );
-    
-    //Find_Best_Segments( gradient, segments, sensitivity );
+    if ( ! Find_Strongest_Segments( derivatives, segments, sensitivity, debug ) )
+        return false;
     
     // Filter segments by length
     for ( int k = 0; k < segments.size(); k++ )
     {
         if ( segments[k].finish - segments[k].start < length_min ) continue;
+        
+        segments[k].start += offset;
+        
+        segments[k].finish += offset;
+        
         Line line( initial, direction, segments[k] );
-        if ( debug ) std::cout<<"\np="<<line.projection<<" s="<<line.strength<<" p="<<line.projection<<" ["<<line.start<<","<<line.finish<<"]";
+        
         lines.insert( std::make_pair( line.projection, line ) );
     }
+    
+    if ( lines.size() == 0 ) return false; // no strong lines found
+    
+    return true;
 }
 
-void Find_Lines (cv::Mat_<cv::Vec3b>& input_color, cv::Mat_<cv::Vec3b>& input_mat, std::vector<Line>& lines, int num_lines, int offset, Mat& fimage)
+bool Derivatives_Initialization (Mat_<Vec3d>const& image, Point initial, Point direction, int offset, int length_min, std::vector<double>& derivatives, bool debug)
 {
+    int s = 0;
+    
+    int b = length_min + offset;
+    
+    if ( direction.y == 0 ) // horizontal
+    {
+        if ( initial.y < offset or image.rows < offset + initial.y )
+            return false; // too close to the boundary
+        
+        s = image.cols + 1;
+    }
+    else if ( direction.x == 0 ) // vertical
+    {
+        if ( initial.x < offset or image.cols < offset + initial.x )
+            return false; // too close to the boundary
+        s = image.rows + 1;
+    }
+    else if ( direction.x == direction.y ) // diagonal down
+    {
+        if ( initial.y < b - image.rows or image.cols - b < initial.x ) return false;
+        
+        s = std::min( image.rows, image.cols ) + 1;
+        
+        if ( s > image.rows - initial.y ) s = image.rows - initial.y;
+        
+        if ( s > image.cols - initial.x ) s = image.cols - initial.x;
+    }
+    else if ( direction.x + direction.y == 0 ) // diagonal up
+    {
+        if ( initial.x < b or image.rows - b < initial.y ) { return false; }
+        
+        s = std::min( image.rows, image.cols ) + 1;
+        
+        if ( initial.y == 0 and s > initial.x ) s = initial.x;
+        
+        if ( initial.x == image.cols and s > image.rows - initial.y ) s = image.rows - initial.y;
+    }
+    else if ( direction == Point(-2,1) )
+    {
+        s = std::min( image.rows+1, (image.cols+1)/2 );
+        
+        if ( initial.x < 2*b or image.rows - b < initial.y ) { return false; }
+        
+        if ( initial.y == 0 and s > 2*initial.x ) s = 2*initial.x;
+        
+        if ( initial.x == image.cols and s > image.rows - initial.y ) s = image.rows - initial.y;
+    }
+    else if ( direction == Point(2,1) )
+    {
+        s = std::min( image.rows+1, (image.cols+1)/2 );
+        
+        if ( initial.x > image.cols - 2*b or initial.y < b - image.rows ) { return false; }
+        
+        if ( initial.y == 0 and 2*s > image.cols - initial.x ) s = (image.cols - initial.x) / 2;
+        
+        if ( initial.x == 0 and s > image.rows - initial.y ) s = image.rows - initial.y;
+    }
+    else if ( direction == Point(1,2) )
+    {
+        s = std::min( (image.rows+1)/2, image.cols+1 );
+        
+        if ( initial.x > image.cols - b or initial.y < 2*b - image.rows ) { return false; }
+        
+        if ( initial.y == 0 and s > image.cols - initial.x ) s = image.cols - initial.x;
+        
+        if ( initial.x == 0 and 2*s > image.rows - initial.y ) s = (image.rows - initial.y) / 2;
+    }
+    
+    else if ( direction == Point(-1,2) )
+    {
+        s = std::min( (image.rows+1)/2, image.cols+1 );
+        
+        if ( initial.x < b or image.rows - 2*b < initial.y ) { return false; }
+        
+        if ( initial.y == 0 and s > initial.x ) s = initial.x;
+        
+        if ( initial.x == image.cols and 2*s > image.rows - initial.y) s = (image.rows - initial.y) / 2;
+    }
+    
+    if ( s <= length_min + 2 * offset - 1 ) return false;
+    
+    if ( debug ) std::cout<<"\nsize="<<s;
+    
+    derivatives.assign( s - 2 * offset + 1, 0 );
+    
+    return true;
+}
+
+
+bool Derivatives (Mat_<Vec3d>const& gradient_x, Mat_<Vec3d>const& gradient_y, Point initial, Point direction, int offset, int length_min, std::vector<double>& derivatives)
+{
+    bool debug = false;
+    
+    double l = norm( direction );
+    
+    if ( ! Derivatives_Initialization( gradient_x, initial, direction, offset, length_min, derivatives, false ) ) return false;
+    
+    Point p;
+    
+    if(direction == Point(0,1) and initial.x <= 91 and 89 <= initial.x ) debug = true; else debug = false;
+    if(debug) cout << "\ndir" << direction << " intial point " << initial;
+    
+    for ( int k = 0; k < derivatives.size(); k++ )
+    {
+        p = initial + (k+offset) * direction;
+        
+        derivatives[ k ] = Color_Norm_Inf( -direction.y * gradient_x.at<Vec3d>( p ) + direction.x * gradient_y.at<Vec3d>( p ) ) / l;
+        
+        if(debug) cout << "\nk=" << k << " " << "gx " << gradient_x.at<Vec3d>( p ) << "gy " << gradient_y.at<Vec3d>( p ) << " " << derivatives[ k ];
+    }
+    
+    return true;
+}
+
+
+bool Persistent_Segments (Mat_<Vec3d>const& gradient_x, Mat_<Vec3d>const& gradient_y, Point initial, Point direction, int offset, int length_min, std::map< int, Line >& lines, double contrast_ratio)
+{
+    bool debug = false; //true;
+    
+    std::vector<double> derivatives;
+    
+    if ( ! Derivatives( gradient_x, gradient_y, initial, direction, offset, length_min, derivatives ) ) return false;
+    
+    if(direction == Point(0,1) and initial.x == 91 ) debug = true; else debug = false;
+    
+    std::vector<Segment> segments;
+    
+    if ( ! Find_Strongest_Segments( derivatives, segments, contrast_ratio, debug ) )
+    //if ( ! Find_Best_Segments( derivatives, segments, contrast_ratio, debug ) )
+        return false;
+    
+    // Filter segments by length
+    for ( int k = 0; k < segments.size(); k++ )
+    {
+        if ( segments[k].finish - segments[k].start < length_min ) continue;
+        
+        segments[k].start += offset;
+        
+        segments[k].finish += offset;
+        
+        Line line( initial, direction, segments[k] );
+        
+        if ( debug ) std::cout<<"\ns="<<line.strength<<" p="<<line.projection<<" ["<<line.start<<","<<line.finish<<"]";
+        
+        lines.insert( std::make_pair( line.projection, line ) );
+    }
+    
+    if ( lines.size() == 0 ) return false; // no strong lines found
+    
+    return true;
+}
+
+
+//=========================
+bool Image_Gradient_x (Mat_<Vec3b>const& image, int offset, Mat_<Vec3d>& gradient_x)
+{
+    cout << "Offset " << offset << endl;
+    
+    for ( int i = offset; i < image.rows - offset; i++ )
+        for ( int j = offset; j < image.cols - offset; j++ )
+        {
+            gradient_x( i, j ) = (Vec3d)image.at<Vec3b>( i-1, j ) + (Vec3d)image.at<Vec3b>( i, j ) - (Vec3d)image.at<Vec3b>( i-1, j-1 ) - (Vec3d)image.at<Vec3b>( i, j-1 );
+            
+            if( j == 91)
+            {
+                cout << "\ni=" << i << " grdx=" << gradient_x( i, j ) << "="<<(Vec3d)image.at<Vec3b>( i-1, j )
+                        <<"+"<<(Vec3d)image.at<Vec3b>( i, j )
+                        <<"-"<< (Vec3d)image.at<Vec3b>( i-1, j-1 )
+                <<"-"<<(Vec3d)image.at<Vec3b>( i, j-1 );
+            }
+        }
+    
+    return true;
+}
+
+
+//=========================
+bool Image_Gradient_y (Mat_<Vec3b>const& image, int offset, Mat_<Vec3d>& gradient_y)
+{
+    for ( int i = offset; i < image.rows - offset; i++ )
+        for ( int j = offset; j < image.cols - offset; j++ )
+            gradient_y( i, j ) = (Vec3d)image.at<Vec3b>( i, j-1 ) + (Vec3d)image.at<Vec3b>( i, j ) - (Vec3d)image.at<Vec3b>( i-1, j-1 ) - (Vec3d)image.at<Vec3b>( i-1, j );
+    return true;
+}
+
+void Find_Lines (cv::Mat_<cv::Vec3b>const& image, std::vector<Line>& lines, int num_lines, int offset, Mat& fimage, double sensitivity)
+{
+    Point ksize( 3, 3 ); // coordinates should be odd
+    //double sigma = 0; // then the default is 0.3*((ksize-1)*0.5 - 1) + 0.8
+    //GaussianBlur( input_color, input_color, ksize, sigma, sigma );
+    
+    Mat_<Vec3d> gradient_x( image.size(), Vec3d(0,0,0) ), gradient_y( image.size(), Vec3d(0,0,0) );
+    
+    Image_Gradient_x( image, offset, gradient_x ); // functions below
+    Image_Gradient_y( image, offset, gradient_y );
+    
     // Parameters
     int length_min = offset;
     // old parameters
@@ -897,43 +1277,45 @@ void Find_Lines (cv::Mat_<cv::Vec3b>& input_color, cv::Mat_<cv::Vec3b>& input_ma
     int width = 4; //min( 4, int( 0.5 * length ) );
     Point box_x( length, width );
     Point box_y( width, length );
-    double sensitivity = 1.5; // ratio of value_max for threshold
+    //double sensitivity = 1.5; // ratio of value_max for threshold
     Point initial, direction;
     
-    // Initialise points
-    std::vector<Point> directions{ Point(1,0), Point(0,1), Point(1,1), Point(-1,1) }; //
+    std::vector<Point> directions{ Point(1,0), Point(0,1), Point(1,1), Point(-1,1), Point(-2,1), Point(2,1), Point(1,2), Point(-1,2) }; //
     std::map< Point, std::vector<Point>, Compare_Points> initial_points;
+    
     for ( auto dir : directions )
     {
         if ( dir.y == 0 ) // horizontal
-            for ( int y = offset + 1; y + offset + 1 < input_mat.rows; y += 1 )
+            for ( int y = offset + 1; y + offset + 1 < image.rows; y += 1 )
                 initial_points[ dir ].push_back( Point( 0, y ) );
-        if ( dir.x == 0 ) // vertical
-            for ( int x = offset + 1; x + offset + 1 < input_mat.cols; x += 1 )
+        else if ( dir.x == 0 ) // vertical
+            for ( int x = offset + 1; x + offset + 1 < image.cols; x += 1 )
                 initial_points[ dir ].push_back( Point( x, 0 ) );
-        if ( dir.x == dir.y ) // diagonal down
-            for ( int x = offset + 1 - input_mat.rows; x + offset + 1 < input_mat.cols; x += 1 )
+        else if ( dir.x == dir.y or dir == Point(2,1) or dir == Point(1,2) ) // diagonal down
+            for ( int x = offset + 1 - image.rows * abs( dir.x ); x + offset + 1 < image.cols; x += 1 )
             {
-                if ( x >= 0 ) initial_points[ dir ].push_back( Point( x, 0 ) );
-                else initial_points[ dir ].push_back( Point( 0, -x ) );
+                if ( x % abs( dir.x ) != 0 ) continue;
+                if ( x >= 0 ) initial_points[ dir ].push_back( Point(x, 0 ) ); // top horizontal side
+                else initial_points[ dir ].push_back( Point( 0, -x / abs( dir.x ) ) ); // left vertical side
             }
-        if ( dir.x + dir.y == 0 ) // diagonal up
-            for ( int x = offset + 1; x + offset + 1 < input_mat.cols + input_mat.rows; x += 1 )
+        else if ( dir.x + dir.y == 0 or dir == Point(-2,1) or dir == Point(-1,2) ) // diagonal up
+            for ( int x = offset + 1; x + offset + 1 < image.cols + image.rows * abs( dir.x ); x += 1 )
             {
-                if ( x < input_mat.cols ) initial_points[ dir ].push_back( Point( x, 0 ) );
-                else initial_points[ dir ].push_back( Point( input_mat.cols, x - input_mat.cols ) );
+                if ( x % abs( dir.x ) != 0 ) continue;
+                
+                if ( x < image.cols ) initial_points[ dir ].push_back( Point( x, 0 ) ); // top horizontal side
+                else initial_points[ dir ].push_back( Point(image.cols, (x - image.cols) / abs( dir.x ) ) ); // right vertical side
             }
     }
     
-    // Find segments
-    double sigma = 2;
-    std::vector<double> coefficients( 2 );
-    for ( int k = 0; k < coefficients.size(); k++ ) coefficients[k] = exp( - k * k / ( 2 * pow( sigma, 2 ) ) );
     std::map< Point, std::map< int, Line >, Compare_Points > map_lines; // 1st = direction, 1st in 2nd = 1D projection along the line
+    std::vector<double> weights{ 1, 0.5 };
+    
     for ( auto direction : directions )
         for ( auto initial : initial_points[ direction ] )
-            Find_Persistent_Segments( input_color, initial, direction, coefficients, length_min, sensitivity, map_lines[ direction ] );
-    
+            //Find_Persistent_Segments( image, initial, direction, offset, length_min, weights, map_lines[ direction ], sensitivity );
+            Persistent_Segments( gradient_x, gradient_y, initial, direction, offset, length_min, map_lines[ direction ], sensitivity );
+            
     // Draw lines
     lines.clear();
     Line line_best;
@@ -942,16 +1324,33 @@ void Find_Lines (cv::Mat_<cv::Vec3b>& input_color, cv::Mat_<cv::Vec3b>& input_ma
     
     for ( int k = 0; k < num_lines; k++ )
         if ( Find_Strongest_Line( map_lines, offset, strongest_lines, direction_best, line_best ) )
+        {
+            cout << "\n" << k;
+            line_best.Print();
             lines.push_back( line_best );
+        }
     
-    Mat img = input_color.clone();
+    Mat img = image.clone();
     fimage = img;
 }
 
 void Draw_Lines (Mat& img ,vector<Line>& lines)
 {
     for ( int k = 0; k < lines.size(); k++ )
-        line( img, lines[ k ].first, lines[ k ].second, Red, 1 );
+    {
+        line( img, lines[ k ].first, lines[ k ].second, Red, 2, CV_AA );
+        circle( img, lines[ k ].first, 3.0, Scalar( 255, 0, 0 ), -1, 8 );
+        circle( img, lines[ k ].second, 3.0, Scalar( 255, 0, 0 ), -1, 8 );
+    }
+    
+    /*
+    for ( int k = 0; k < lines.size(); k++ )
+    {
+        line( img, 4*lines[ k ].first, 4*lines[ k ].second, Red, 1, CV_AA );
+        circle( img, 4*lines[ k ].first, 2.0, Scalar( 255, 0, 0 ), -1, 8 );
+        circle( img, 4*lines[ k ].second, 2.0, Scalar( 255, 0, 0 ), -1, 8 );
+    }
+    */
 }
 
 /* Save image to file */
@@ -1261,13 +1660,23 @@ double Measure_Boundary_Recall (string name, vector<Line>& lines, double eps, in
 }
 
 // Testing PLSD method
-void Run_PLSD (string name, cv::Mat_<cv::Vec3b>& input_color, cv::Mat_<cv::Vec3b>& input_mat, std::vector<Line>& lines, int num_lines, double eps, int offset, Mat &fimage, float& exec_time)
+void Run_PLSD (string name, cv::Mat_<cv::Vec3b>& input_mat, std::vector<Line>& lines, int num_lines, double eps, int offset, Mat &fimage, float& exec_time, double sensitivity, bool gray_scale )
 {
+    cv::Mat greyMat;
+    Mat_<Vec3b> colorMat;
+    
+    if(gray_scale)
+    {
+        cv::cvtColor(input_mat, greyMat, cv::COLOR_BGR2GRAY);
+        cv::cvtColor(greyMat, colorMat, cv::COLOR_GRAY2RGB);
+        input_mat = colorMat.clone();
+    }
+    
     // Measure execution time
     high_resolution_clock::time_point t1 = high_resolution_clock::now();
     
-    Find_Lines( input_color, input_mat, lines, num_lines, offset, fimage );
-
+    Find_Lines( input_mat, lines, num_lines, offset, fimage, sensitivity );
+    
     high_resolution_clock::time_point t2 = high_resolution_clock::now();
     
     auto dur = t2 - t1;
@@ -1311,10 +1720,10 @@ void Run_LSD (string name, Mat& image, std::vector<Line>& lines_LSD, int& num_li
     fimage = image.clone();
 }
 
-void Save_Performance_To_Txt_File (string name, float num_lines_lsd, float num_lines_plsd, double LSD_BR2, float LSD_time, double PLSD_BR2, float PLSD_time, float nb_intersections, string path, int offset)
+void Save_Performance_To_Txt_File (string name, float num_lines_lsd, float num_lines_plsd, double LSD_BR2, float LSD_time, double PLSD_BR2, float PLSD_time, float nb_intersections, string path, int offset, double sensitivity)
 {
     std::ostringstream oss;
-    oss << to_string(offset) + "_offset_all_BSD500_results" << ".txt";
+    oss << to_string(sensitivity) + "_sensitivity_" + to_string(offset) + "_offset_all_BSD500_results" << ".txt";
     
     cout << oss.str() << endl;
     
@@ -1328,7 +1737,7 @@ void Save_Performance_To_Txt_File (string name, float num_lines_lsd, float num_l
     ofs.close();
 }
 
-void Calculate_Average_Performance (string name, std::vector<float>& list_of_nb_lines_lsd, std::vector<float>& list_of_nb_lines_plsd, vector<double>& best_boudnary_recall_LSD, vector<double>& best_boudnary_recall_PLSD, vector<float>& LSD_time, vector<float>& PLSD_time, vector<float>& list_nb_intersections, string path, int offset)
+void Calculate_Average_Performance (string name, std::vector<float>& list_of_nb_lines_lsd, std::vector<float>& list_of_nb_lines_plsd, vector<double>& best_boudnary_recall_LSD, vector<double>& best_boudnary_recall_PLSD, vector<float>& LSD_time, vector<float>& PLSD_time, vector<float>& list_nb_intersections, string path, int offset, double sensitivity)
 {
     float average_number_of_lines_lsd = std::accumulate( list_of_nb_lines_lsd.begin(), list_of_nb_lines_lsd.end(), 0.0) / list_of_nb_lines_lsd.size();
     
@@ -1344,7 +1753,7 @@ void Calculate_Average_Performance (string name, std::vector<float>& list_of_nb_
 
     float average_PLSD_time = std::accumulate( PLSD_time.begin(), PLSD_time.end(), 0.0) / PLSD_time.size();
     
-    Save_Performance_To_Txt_File( name, average_number_of_lines_lsd, average_number_of_lines_plsd, average_br_LSD, average_LSD_time, average_br_PLSD, average_PLSD_time, average_number_of_line_intersections_lsd, path, offset );
+    Save_Performance_To_Txt_File( name, average_number_of_lines_lsd, average_number_of_lines_plsd, average_br_LSD, average_LSD_time, average_br_PLSD, average_PLSD_time, average_number_of_line_intersections_lsd, path, offset, sensitivity );
 }
 
 void Scale_Up_Image (Mat& src_image, Mat& dst_image, int scale)
@@ -1453,16 +1862,171 @@ int Number_Intersections_LSD (vector<Line>& lines)
     return nb_inters;
 }
 
+void Find_Difference (double BR2_PLSD, double BR2_LSD, string id, multimap <double, string>& m)
+{
+    double diff = abs( BR2_PLSD - BR2_LSD );
+    
+    m.insert( pair<double, string> (diff, id) );
+}
+
+void Highest_Difference (multimap <double, string>& m, int nb_top_images, vector<string>& top_images)
+{
+    for (std::multimap<double,string>::iterator it=m.begin(); it!=m.end(); ++it)
+    {
+        int dist = (int)std::distance(m.begin(), it);
+        
+        if( dist < nb_top_images)
+        {
+            top_images.push_back( (*it).second );
+            std::cout << ' ' << (*it).second;
+        }
+        else break;
+    } 
+}
+
+void Save_Top_Images (vector<string>& top_images, int offset, double sensitivity, string path)
+{
+    std::ostringstream oss;
+    oss << to_string(sensitivity) + "_sensitivity_" + to_string(offset) + "_offset_10_top_results" << ".txt";
+    
+    cout << oss.str() << endl;
+    
+    std::string file_name = oss.str();
+    
+    std::ofstream ofs;
+    ofs.open (path + file_name, std::ofstream::out | std::ofstream::app);
+    
+    for (std::vector<string>::iterator it = top_images.begin() ; it != top_images.end(); ++it)
+    {
+        ofs << *it << endl;
+    }
+    
+    ofs.close();
+}
+
+// Accuracy
+double Compute_ACC (double TP, double TP_FP, double TN, double FN)
+{
+    double ACC = (TP + TN) / (TP_FP + FN + TN);
+    
+    return ACC;
+}
+
+// Sensitivity
+double Compute_True_Positive_Rate (double TP, double FN)
+{
+    double TPR = TP / (TP + FN);
+    
+    return TPR;
+}
+
+//Precision
+double Compute_Positive_Predictive_Value (double TP, double TP_FP)
+{
+    double PPV = TP / TP_FP;
+
+    return PPV;
+}
+
+void Discretize_Segments (vector<Line>& lines, vector<Point2d>& output, Point& sizes)
+{
+    Mat img( Mat( sizes.y, sizes.x, CV_8UC3 ) );
+
+    img = White;
+    
+    // Draw lines
+    for ( int k = 0; k < lines.size(); k++ )
+        line( img, lines[ k ].first, lines[ k ].second, Black, 1 );
+    
+    // Extract black pixels
+    for (int i = 0; i < img.cols; i++ )
+    {
+        for (int j = 0; j < img.rows; j++)
+        {
+             if (img.at<uchar>(j, i) == 0)
+             {
+                 output.push_back(Point(j,i));
+             }
+        }
+    }
+    
+    cout << "\nNb of pixels in image: " << sizes.x * sizes.y << endl;
+    cout << "Nb of black pixels: " << (int)output.size() << endl;
+}
+
+double Compute_TP (vector<Point2d>& black_px, vector<Point2d>& boundary)
+{
+    double TP = 0.0;
+    
+    for (int i=0; i<(int)boundary.size(); ++i)
+    {
+        for (int j=0; j<(int)black_px.size(); ++j)
+        {
+            if(black_px[j].x == (int)boundary[i].x and black_px[j].y == (int)boundary[i].y)
+                TP++;
+        }
+    }
+    
+    return TP;
+}
+
+void Save_Statistical_Measures_To_Txt (string fname, string name, string path, double tpr, double ppv, double acc)
+{
+    std::ostringstream oss;
+    oss << fname << "_statistics" << ".txt";
+    
+    cout << oss.str() << endl;
+    
+    std::string file_name = oss.str();
+    
+    std::ofstream ofs;
+    ofs.open (path + file_name, std::ofstream::out | std::ofstream::app);
+    
+    ofs << name << " " << tpr << " " << ppv << " " << acc << endl;
+    
+    ofs.close();
+}
+
+void Compute_Statistical_Measures (Point& sizes, vector<Point2d>& black_px, vector<Point2d>& boundary, string name, string path, string fname)
+{
+    bool debug = true;
+    int nb_black_px = (int)black_px.size();
+    int nb_gt = (int)boundary.size();
+    
+    double TP = Compute_TP(black_px, boundary);
+    double TPR = Compute_True_Positive_Rate(TP, nb_gt);
+    
+    if(debug) cout << "\nTPR=" << TPR << endl;
+    
+    double PPV = Compute_Positive_Predictive_Value(TP, nb_black_px);
+    
+    if(debug) cout << "\nPPV=" << PPV << endl;
+
+    double TN = sizes.x*sizes.y - (nb_gt + nb_black_px);
+    double FN = nb_gt - TP;
+    double TP_FP = nb_black_px;
+    
+    double ACC = Compute_ACC(TP, TP_FP, TN, FN);
+    
+    if(debug) cout << "\nACC=" << ACC << endl;
+    
+    // Save results to txt
+    Save_Statistical_Measures_To_Txt(fname, name, path, TPR, PPV, ACC);
+}
+
 int main(int argc, const char * argv[])
 {
     cout << "Persistent Line Detector\n";
     
     bool debug = true;
     bool save_images = false; //flag to save PLSD and LSD output as images
-    bool save_averages = true; //flag to calculate and save averages
+    bool save_averages = false; //flag to calculate and save averages
+    bool calculate_br2 = true;
+    bool gray_scale = false; //if we want to process grayscale images
+    bool scale_up_image = false;
 
     // Number of images for testing
-    int num_images = 500; //500;
+    int num_images = 5;
     
     // Number of lines segments
     int num_lines = 0;
@@ -1471,7 +2035,10 @@ int main(int argc, const char * argv[])
     double eps = 2.0;
     
     // Offset parameter for PLSD algorithm
-    int offset = 3;
+    int offset = 5;
+    
+    // Sensitivity for threold
+    double sensitivity = 0.60;
     
     // Nb of intersections for LSD algorithm
     int nb_intersections = 0;
@@ -1479,11 +2046,13 @@ int main(int argc, const char * argv[])
     // Scale parameter for images
     int scale_up_param = 4;
     
+    int max_nb_of_segmentations = 0;
+    
     //Name of one testing image
-    string name = "8023";
+    string name = "8023"; //"61034"; //"Testing_Image";
     
     // File extension
-    string ext = "jpg";
+    string ext = "jpg";//"png";
     
     // Mats for saving images
     Mat img_LSD;
@@ -1506,7 +2075,7 @@ int main(int argc, const char * argv[])
 
     string path_folder_to_list_of_images = "/Users/Grzegorz/Desktop/project_internship/Persistent_Line_Detector/"; // path to BSD500sizes.txt
     string path_to_BSD500_folder = "/Users/Grzegorz/Desktop/project_internship/BSR/BSDS500/data/images/all/";   // path to all 500 images from BSD500
-    string path_to_output_folder = "/Users/Grzegorz/Desktop/project_internship/Persistent_Line_Detector/output_results/"; //path to output dir of both algorithms
+    string path_to_output_folder = "/Users/Grzegorz/Desktop/project_internship/Persistent_Line_Detector/output_results/results_for_updated_code/pairs_of_good_images/"; //path to output dir of both algorithms
     string path_to_dat_files = "/Users/Grzegorz/Desktop/project_internship/Persistent_Line_Detector/data/";
     
     Read_Image_Names_Sizes( path_folder_to_list_of_images + "BSD500sizes.txt", image_names, image_sizes );
@@ -1515,12 +2084,15 @@ int main(int argc, const char * argv[])
     
     if (debug) cout << "Nb of analyzed images: " << num_images << endl;
     
+    multimap <double, string> list_of_perf_differences;
+    
     // Loop over chosen number of images from BSD500
     for ( int i = 0; i < num_images; i++ )
     {
         lines_LSD.clear();
         lines_PLSD.clear();
         num_lines = 0;
+        max_nb_of_segmentations = 0;
         
         if ( num_images > 1 ) name = image_names[i];
         
@@ -1539,14 +2111,24 @@ int main(int argc, const char * argv[])
         map<double, int> list_of_boundary_recalls_PLSD;
         
         //Run Line Segment Detector
-        Run_LSD( name, input_color, lines_LSD, num_lines, eps, img_LSD, exec_time_lsd );
+        Run_LSD( name, input_mat, lines_LSD, num_lines, eps, img_LSD, exec_time_lsd );
         
         //number of segment intersections
         nb_intersections = Number_Intersections_LSD( lines_LSD );
         list_nb_intersections_LSD.push_back(nb_intersections);
         
         //Run Persistent Line Segment Detector
-        Run_PLSD( name, input_color, input_mat, lines_PLSD, num_lines, eps, offset, img_PLSD, exec_time_plsd );
+        Run_PLSD( name, input_mat, lines_PLSD, num_lines, eps, offset, img_PLSD, exec_time_plsd, sensitivity, gray_scale );
+        
+        vector<Point2d> PLSD_discretised_segments;
+        Discretize_Segments( lines_PLSD, PLSD_discretised_segments, sizes );
+        
+        vector<Point2d> LSD_discretised_segments;
+        Discretize_Segments( lines_LSD, LSD_discretised_segments, sizes );
+        
+        cout << "Nb lines: " << endl;
+        cout << "LSD: " << num_lines << endl;
+        cout << "PLSD: " << lines_PLSD.size() << endl;
         
         if(debug) cout << exec_time_lsd << " " << exec_time_plsd << endl;
         
@@ -1556,8 +2138,11 @@ int main(int argc, const char * argv[])
         
         vector<Point2d> boundary;
 
+        if( calculate_br2 )
+        {
         // Find number of human segmentations for a given input image
-        int max_nb_of_segmentations = Find_File_Names(name, path_to_dat_files);
+        max_nb_of_segmentations = Find_File_Names(name, path_to_dat_files);
+        
         for (int segment_nb = 1; segment_nb <= max_nb_of_segmentations; ++segment_nb)
         {
             boundary.clear();
@@ -1594,43 +2179,64 @@ int main(int argc, const char * argv[])
         double best_br_lsd = list_of_boundary_recalls_LSD.rbegin()->first;
         if (debug) cout<<"\nBest boundary recall for LSD: "<< best_br_lsd << "\tNr: " << list_of_boundary_recalls_LSD.rbegin()->second << endl;
         best_boudnary_recall_LSD.push_back( best_br_lsd );
-        
+            
         // Return the best boundary recall for a given image (PLSD)
         double best_br_plsd = list_of_boundary_recalls_PLSD.rbegin()->first;
         if (debug) cout<<"\nBest boundary recall for PLSD: "<< best_br_plsd << "\tNr: " << list_of_boundary_recalls_PLSD.rbegin()->second << endl;
         best_boudnary_recall_PLSD.push_back( best_br_plsd );
+            
+        // Compute sensitivity, precision, accuracy
+        boundary.clear();
+        Select_Boudnary_Points( name, boundary, list_of_boundary_recalls_PLSD.rbegin()->second, path_to_dat_files );
+        Compute_Statistical_Measures( sizes, PLSD_discretised_segments, boundary, name, path_to_output_folder, "PLSD" );
         
+        // Find differences in BR2
+        Find_Difference(best_br_plsd, best_br_lsd, name, list_of_perf_differences);
+            
         list_of_nb_lines_LSD.push_back( num_lines );
         list_of_nb_lines_PLSD.push_back( (int)lines_PLSD.size() );
         
-        Save_Performance_To_Txt_File( name, num_lines, (int)lines_PLSD.size(), best_br_lsd, exec_time_lsd, best_br_plsd, exec_time_plsd, nb_intersections, path_to_output_folder, offset );
+        Save_Performance_To_Txt_File( name, num_lines, (int)lines_PLSD.size(), best_br_lsd, exec_time_lsd, best_br_plsd, exec_time_plsd, nb_intersections, path_to_output_folder, offset, sensitivity );
         
         list_of_boundary_recalls_LSD.clear();
         list_of_boundary_recalls_PLSD.clear();
+        }
         
         if( save_images )
         {
-            Draw_Lines( img_LSD, lines_LSD );
-            //Draw_Lines_With_Thickness( img_LSD, lines_LSD );
-            
             Mat dst_image_LSD;
-            Scale_Up_Image( img_LSD, dst_image_LSD, scale_up_param );
+            if(scale_up_image) Scale_Up_Image( img_LSD, dst_image_LSD, scale_up_param );
+            else
+                dst_image_LSD = img_LSD.clone();
+            
+            Draw_Lines( dst_image_LSD, lines_LSD );
+            //Draw_Lines_With_Thickness( img_LSD, lines_LSD );
             
             Write_Image( dst_image_LSD, path_to_output_folder + name+ "_LSD" + ".png" );
         
-            Draw_Lines( img_PLSD, lines_PLSD );
-            //Draw_Lines_With_Thickness( img_PLSD, lines_PLSD );
-            
             Mat dst_image_PLSD;
-            Scale_Up_Image( img_PLSD, dst_image_PLSD, scale_up_param );
+            if(scale_up_image) Scale_Up_Image( img_PLSD, dst_image_PLSD, scale_up_param );
+            else
+                dst_image_PLSD = img_PLSD.clone();
+            
+            Draw_Lines( dst_image_PLSD, lines_PLSD );
+            //Draw_Lines_With_Thickness( img_PLSD, lines_PLSD );
             
             Write_Image( dst_image_PLSD, path_to_output_folder + name + "_PLSD" + ".png" );
         }
     }
     
+    vector<string> top_images;
+    
+    // Find ten top images
+    Highest_Difference( list_of_perf_differences, 10, top_images );
+    
+    //Save ids to txt file
+    Save_Top_Images( top_images, offset, sensitivity, path_to_output_folder );
+    
     // Computer average performance
     if(save_averages)
-        Calculate_Average_Performance ( "average:", list_of_nb_lines_LSD, list_of_nb_lines_PLSD, best_boudnary_recall_LSD, best_boudnary_recall_PLSD, LSD_time, PLSD_time, list_nb_intersections_LSD, path_to_output_folder, offset );
+        Calculate_Average_Performance ( "average:", list_of_nb_lines_LSD, list_of_nb_lines_PLSD, best_boudnary_recall_LSD, best_boudnary_recall_PLSD, LSD_time, PLSD_time, list_nb_intersections_LSD, path_to_output_folder, offset, sensitivity );
     
     return 0;
 }
